@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../nucleo/constantes/api_constants.dart';
 import '../nucleo/database/app_database.dart';
 import '../models/usuario_model.dart';
 
@@ -32,10 +33,7 @@ abstract class AuthRepository {
 class AuthRepositoryImpl implements AuthRepository {
   final AppDatabase _db = AppDatabase.instance;
 
-  static const String _apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  static const String _apiBaseUrl = ApiConstants.baseUrl;
 
   static const String _keyAccessToken = 'agilista_access_token';
   static const String _keyRefreshToken = 'agilista_refresh_token';
@@ -107,7 +105,7 @@ class AuthRepositoryImpl implements AuthRepository {
             },
             body: jsonEncode({'refresh_token': refreshToken}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(ApiConstants.timeoutPadrao);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -191,7 +189,7 @@ class AuthRepositoryImpl implements AuthRepository {
             'password': senha,
           }),
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(ApiConstants.timeoutPadrao);
 
     if (loginResponse.statusCode == 401) {
       throw Exception('E-mail ou senha inválidos.');
@@ -218,7 +216,7 @@ class AuthRepositoryImpl implements AuthRepository {
             'Accept': 'application/json',
           },
         )
-        .timeout(const Duration(seconds: 10));
+        .timeout(ApiConstants.timeoutPadrao);
 
     if (meResponse.statusCode == 200) {
       final perfilData = jsonDecode(utf8.decode(meResponse.bodyBytes)) as Map<String, dynamic>;
@@ -295,7 +293,7 @@ class AuthRepositoryImpl implements AuthRepository {
             },
             body: jsonEncode(payloadApi),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(ApiConstants.timeoutPadrao);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         final criadoData = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
@@ -432,7 +430,7 @@ class AuthRepositoryImpl implements AuthRepository {
                 },
                 body: jsonEncode(payloadPut),
               )
-              .timeout(const Duration(seconds: 10));
+              .timeout(ApiConstants.timeoutPadrao);
         }
 
         var response = await enviarPut(token);
@@ -488,7 +486,7 @@ class AuthRepositoryImpl implements AuthRepository {
             },
             body: jsonEncode({'email': emailLimpo}),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(ApiConstants.timeoutPadrao);
 
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
 
@@ -528,7 +526,7 @@ class AuthRepositoryImpl implements AuthRepository {
               'nova_senha': senhaLimpa,
             }),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(ApiConstants.timeoutPadrao);
 
       final data = jsonDecode(utf8.decode(response.bodyBytes)) as Map<String, dynamic>;
 

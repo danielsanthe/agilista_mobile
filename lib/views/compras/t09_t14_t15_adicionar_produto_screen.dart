@@ -91,6 +91,15 @@ class _AdicionarProdutoScreenState
     _nomeNovoProdutoFocusNode = FocusNode();
     _precoFocusNode = FocusNode();
 
+    // Seleciona todo o texto apenas na primeira vez que o campo recebe foco,
+    // permitindo que toques seguintes posicionem o cursor livremente no texto.
+    _nomeNovoProdutoFocusNode.addListener(() {
+      if (_nomeNovoProdutoFocusNode.hasFocus &&
+          _nomeNovoProdutoController.text.isNotEmpty) {
+        _selecionarTextoTodo(_nomeNovoProdutoController);
+      }
+    });
+
     // Preenche os valores iniciais caso seja um item planejado da lista (T09)
     // ou inicia zerado caso seja um item fora da lista (T14).
     // A busca no catálogo NÃO dispara automaticamente na abertura da tela:
@@ -932,12 +941,6 @@ class _AdicionarProdutoScreenState
                               borderRadius: BorderRadius.circular(8),
                             ),
                           ),
-                          onTap: () {
-                            if (isFluxoT09 &&
-                                _nomeNovoProdutoController.text.isNotEmpty) {
-                              _selecionarTextoTodo(_nomeNovoProdutoController);
-                            }
-                          },
                         ),
                       ],
                     ),

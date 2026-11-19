@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
 import '../controllers/autenticacao_controller.dart';
+import '../nucleo/constantes/api_constants.dart';
 import '../nucleo/constantes/status_constants.dart';
 import '../nucleo/database/app_database.dart';
 import '../repositories/autenticacao_repository.dart';
@@ -37,10 +38,8 @@ class SincronizacaoProdutosService {
   final ExclusaoRepository _exclusaoRepo;
   final SincronizacaoCategoriasService _syncCategorias;
 
-  static const String _apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  /// URL base da API FastAPI centralizada em [ApiConstants].
+  static const String _apiBaseUrl = ApiConstants.baseUrl;
 
   SincronizacaoProdutosService({
     required this._authRepo,
@@ -114,13 +113,13 @@ class SincronizacaoProdutosService {
 
       switch (metodo) {
         case 'POST':
-          return http.post(uri, headers: headers, body: payload).timeout(const Duration(seconds: 10));
+          return http.post(uri, headers: headers, body: payload).timeout(ApiConstants.timeoutPadrao);
         case 'PUT':
-          return http.put(uri, headers: headers, body: payload).timeout(const Duration(seconds: 10));
+          return http.put(uri, headers: headers, body: payload).timeout(ApiConstants.timeoutPadrao);
         case 'DELETE':
-          return http.delete(uri, headers: headers).timeout(const Duration(seconds: 10));
+          return http.delete(uri, headers: headers).timeout(ApiConstants.timeoutPadrao);
         default:
-          return http.get(uri, headers: headers).timeout(const Duration(seconds: 10));
+          return http.get(uri, headers: headers).timeout(ApiConstants.timeoutPadrao);
       }
     }
 

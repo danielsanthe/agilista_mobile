@@ -6,6 +6,7 @@ import 'package:http/http.dart' as http;
 
 import '../models/produto_model.dart';
 import '../models/categoria_model.dart';
+import '../nucleo/constantes/api_constants.dart';
 import '../repositories/produtos_repository.dart';
 import '../services/sincronizacao_produtos_service.dart';
 import 'autenticacao_controller.dart';
@@ -48,10 +49,7 @@ final produtosControllerProvider =
 
 class ProdutosController extends AsyncNotifier<List<ProdutoModel>> {
   // Configurações de integração com a API FastAPI (Produtos Globais) e APIs públicas (GTIN)
-  static const String _apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  static const String _apiBaseUrl = ApiConstants.baseUrl;
   static const String _si5Token = String.fromEnvironment('SI5_TOKEN');
 
   /// Cache em memória para evitar requisições repetidas do mesmo código de barras na sessão
@@ -398,7 +396,7 @@ class ProdutosController extends AsyncNotifier<List<ProdutoModel>> {
           'Accept': 'application/json',
           'Authorization': 'Bearer $token',
         },
-      ).timeout(const Duration(seconds: 10));
+      ).timeout(ApiConstants.timeoutPadrao);
 
       // Se o access_token expirou (401), tenta renovar automaticamente usando o refresh_token
       if (response.statusCode == 401) {
@@ -410,7 +408,7 @@ class ProdutosController extends AsyncNotifier<List<ProdutoModel>> {
               'Accept': 'application/json',
               'Authorization': 'Bearer $novoToken',
             },
-          ).timeout(const Duration(seconds: 10));
+          ).timeout(ApiConstants.timeoutPadrao);
         }
       }
 

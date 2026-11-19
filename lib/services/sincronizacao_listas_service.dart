@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 
+import '../nucleo/constantes/api_constants.dart';
 import '../nucleo/constantes/estados_constants.dart';
 import '../nucleo/constantes/status_constants.dart';
 import '../nucleo/database/app_database.dart';
@@ -37,12 +38,8 @@ class SincronizacaoListasService {
   /// Serviço de sincronização prévia de categorias e catálogo pessoal de produtos.
   final SincronizacaoProdutosService _syncProdutos;
 
-  /// URL base da API FastAPI injetada em tempo de compilação (`--dart-define`).
-  /// Utiliza `http://10.0.2.2:8000` como fallback padrão para o emulador Android.
-  static const String _apiBaseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://10.0.2.2:8000',
-  );
+  /// URL base da API FastAPI centralizada em [ApiConstants].
+  static const String _apiBaseUrl = ApiConstants.baseUrl;
 
   /// Construtor com suporte a injeção de dependências para testes e Riverpod.
   SincronizacaoListasService({
@@ -53,13 +50,13 @@ class SincronizacaoListasService {
   })  : _db = db ?? AppDatabase.instance,
         _exclusaoRepo = exclusaoRepo ?? ExclusaoRepository();
 
-  /// Verifica rapidamente (máximo 2s) se a Agilista-api está acessível na rede.
-  /// Evita atrasos acumulados na interface quando o dispositivo está offline.
+  /// Verifica se a Agilista-api está acessível na rede utilizando `/health`.
+  /// Usa [ApiConstants.timeoutPadrao] para tolerar o despertar (cold start) do Render.
   Future<bool> _servidorDisponivel() async {
     try {
       final response = await http
-          .get(Uri.parse('$_apiBaseUrl/openapi.json'))
-          .timeout(const Duration(seconds: 2));
+          .get(Uri.parse('$_apiBaseUrl/health'))
+          .timeout(ApiConstants.timeoutPadrao);
       return response.statusCode < 500;
     } catch (_) {
       return false;
@@ -96,7 +93,7 @@ class SincronizacaoListasService {
         return false;
       }
 
-      // Fast-fail em 2 segundos caso não haja conexão com o servidor FastAPI
+      // Verifica disponibilidade do servidor FastAPI tolerando cold start
       final online = await _servidorDisponivel();
       if (!online) {
         debugPrint('[SincronizacaoListas] Servidor indisponível no momento. Operando offline.');
@@ -145,19 +142,19 @@ class SincronizacaoListasService {
         case 'POST':
           return http
               .post(uri, headers: headers, body: payload)
-              .timeout(const Duration(seconds: 12));
+              .timeout(ApiConstants.timeoutPadrao);
         case 'PUT':
           return http
               .put(uri, headers: headers, body: payload)
-              .timeout(const Duration(seconds: 12));
+              .timeout(ApiConstants.timeoutPadrao);
         case 'DELETE':
           return http
               .delete(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
+              .timeout(ApiConstants.timeoutPadrao);
         default:
           return http
               .get(uri, headers: headers)
-              .timeout(const Duration(seconds: 12));
+              .timeout(ApiConstants.timeoutPadrao);
       }
     }
 
