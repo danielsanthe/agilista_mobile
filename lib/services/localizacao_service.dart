@@ -149,4 +149,46 @@ class LocationService {
 
     return null;
   }
+
+  /// Obs. (novo): obtém apenas a posição atual (latitude/longitude) para uso no mapa,
+  /// reutilizando as mesmas verificações de GPS e permissão de [obterEnderecoAtual].
+  Future<Position> obterPosicaoAtual() async {
+    final bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
+    if (!serviceEnabled) {
+      throw Exception('O serviço de GPS está desativado. Por favor, ative a localização do dispositivo.');
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.denied) {
+        throw Exception('Permissão de acesso à localização negada.');
+      }
+    }
+
+    if (permission == LocationPermission.deniedForever) {
+      throw Exception('As permissões de localização foram permanentemente negadas. Altere nas configurações do aparelho.');
+    }
+
+    return Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 10),
+      ),
+    );
+  }
+
+  /// Obs. (novo): geocodificação direta — converte um endereço/nome de local em coordenadas.
+  /// Retorna `null` se não encontrar, estiver sem internet ou no ambiente Web
+  /// (onde a biblioteca geocoding não é suportada).
+  Future<({double latitude, double longitude})?> coordenadasDoEndereco(String endereco) async {
+    if (kIsWeb) return null;
+    try {
+      final locais = await _geocoding.locationFromAddress(endereco);
+      if (locais.isEmpty) return null;
+      return (latitude: locais.first.latitude, longitude: locais.first.longitude);
+    } catch (_) {
+      return null;
+    }
+  }
 }

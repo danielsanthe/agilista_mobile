@@ -7,11 +7,23 @@ import '../nucleo/constantes/api_constants.dart';
 import '../nucleo/database/app_database.dart';
 import '../models/usuario_model.dart';
 
+/// Lançada quando a API rejeita explicitamente o cadastro (409 duplicado / 422 inválido).
+/// Nesses casos NÃO se deve salvar offline, pois o registro nunca seria aceito depois.
+class CadastroRejeitadoException implements Exception {
+  final String mensagem;
+  CadastroRejeitadoException(this.mensagem);
+  @override
+  String toString() => mensagem;
+}
+
 /// ============================================================================
 /// REPOSITÓRIO DE AUTENTICAÇÃO E PERFIL DE USUÁRIO (OFFLINE-FIRST + FASTAPI)
 /// ============================================================================
 /// Abstração e implementação do acesso aos dados da tabela `usuarios` no SQLite
 /// integrada à API FastAPI (`/api/v1/auth` e `/api/v1/usuarios`).
+///
+/// Obs.: usuário criado/editado offline é enviado depois por `sincronizarUsuarioPendente`
+/// (cria a conta no servidor, obtém o JWT e envia o perfil pendente).
 abstract class AuthRepository {
   Future<UsuarioModel> cadastrarUsuario(UsuarioModel usuario);
   Future<UsuarioModel?> login(String email, String senha);
@@ -28,6 +40,10 @@ abstract class AuthRepository {
   Future<String?> obterTokenAcesso();
   Future<String?> renovarTokenAcesso();
   Future<void> limparTokens();
+
+  /// Envia ao servidor o usuário criado/editado offline (cadastro + tokens + perfil).
+  /// Retorna o usuário local atualizado, ou `null` se ainda não foi possível sincronizar.
+  Future<UsuarioModel?> sincronizarUsuarioPendente(int idUsuarioLocal);
 }
 
 class AuthRepositoryImpl implements AuthRepository {
@@ -72,15 +88,9 @@ class AuthRepositoryImpl implements AuthRepository {
     try {
       final prefs = await SharedPreferences.getInstance();
       final idLocal = prefs.getInt(_keyUsuarioLogadoId);
-      final accessToken = prefs.getString(_keyAccessToken);
-      final refreshToken = prefs.getString(_keyRefreshToken);
-
-      final temTokenValido = (accessToken != null && accessToken.isNotEmpty) ||
-          (refreshToken != null && refreshToken.isNotEmpty);
-
-      if (idLocal == null || !temTokenValido) {
-        return null;
-      }
+      // Obs.: a sessão não exige mais token; usuário cadastrado offline ainda não possui
+      // token, mas a sessão local deve ser restaurada mesmo assim.
+      if (idLocal == null) return null;
 
       return await buscarPorId(idLocal);
     } catch (e) {
@@ -123,6 +133,8 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   /// Sincroniza ou cria o registro do usuário autenticado na API no banco SQLite local.
+  /// Obs.: edições locais pendentes (`flag_sincronizado = 0`) são enviadas antes, em
+  /// `_autenticarNaApi`, para não serem sobrescritas por esta função.
   Future<UsuarioModel> _sincronizarUsuarioLocal({
     required Map<String, dynamic> dadosApi,
     required String senhaPlana,
@@ -176,6 +188,7 @@ class AuthRepositoryImpl implements AuthRepository {
   }
 
   /// Realiza signin na FastAPI (`/api/v1/auth/signin`), salva os tokens e busca `/api/v1/usuarios/me`.
+  /// Obs.: antes de buscar `/me`, envia cadastro/edição pendente feito offline (se houver).
   Future<UsuarioModel?> _autenticarNaApi(String email, String senha) async {
     final loginResponse = await http
         .post(
@@ -207,6 +220,19 @@ class AuthRepositoryImpl implements AuthRepository {
 
     await _salvarTokens(accessToken, refreshToken);
 
+    // Obs.: se houver cadastro/edição feito offline ainda não enviado, envia ANTES de
+    // sobrescrever o SQLite com os dados do servidor (evita perder alterações locais).
+    final dbPend = await _db.database;
+    final pendentes = await dbPend.query(
+      'usuarios',
+      where: 'email = ? AND (servidor_id IS NULL OR flag_sincronizado = 0)',
+      whereArgs: [email.trim().toLowerCase()],
+    );
+    if (pendentes.isNotEmpty) {
+      final enviado = await sincronizarUsuarioPendente(pendentes.first['id_usuario'] as int);
+      if (enviado != null) return enviado;
+    }
+
     // Busca o perfil completo do usuário autenticado na API (/api/v1/usuarios/me)
     final meResponse = await http
         .get(
@@ -227,6 +253,197 @@ class AuthRepositoryImpl implements AuthRepository {
     }
 
     return null;
+  }
+
+  /// Faz signin apenas para obter/salvar os tokens (não altera o SQLite).
+  Future<bool> _obterTokensPorSignin(String email, String senha) async {
+    final resp = await http
+        .post(
+          Uri.parse('$_apiBaseUrl/api/v1/auth/signin'),
+          headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+          body: jsonEncode({'email': email, 'password': senha}),
+        )
+        .timeout(ApiConstants.timeoutPadrao);
+    if (resp.statusCode != 200) return false;
+    final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+    final access = data['access_token'] as String?;
+    final refresh = data['refresh_token'] as String?;
+    if (access == null || refresh == null) return false;
+    await _salvarTokens(access, refresh);
+    return true;
+  }
+
+  /// Monta o payload da API a partir de uma linha da tabela `usuarios`.
+  Map<String, dynamic> _payloadUsuarioApi(Map<String, dynamic> u, {required bool incluirSenha}) {
+    String? limpo(dynamic v) {
+      final s = v?.toString().trim();
+      return (s == null || s.isEmpty) ? null : s;
+    }
+
+    final campos = <String, String?>{
+      'cpf': limpo(u['cpf'])?.replaceAll(RegExp(r'\D'), ''),
+      'telefone': limpo(u['telefone']),
+      'cep': limpo(u['cep']),
+      'logradouro': limpo(u['logradouro']),
+      'numero': limpo(u['numero']),
+      'bairro': limpo(u['bairro']),
+      'cidade': limpo(u['cidade']),
+      'uf': limpo(u['uf']),
+    };
+    return <String, dynamic>{
+      'nome_usuario': (u['nome_usuario'] as String).trim(),
+      'email': (u['email'] as String).trim().toLowerCase(),
+      if (incluirSenha) 'senha': u['senha_hash'],
+      for (final e in campos.entries)
+        if (e.value != null && e.value!.isNotEmpty) e.key: e.value,
+    };
+  }
+
+  /// GET/PUT autenticado em endpoints de usuário, com renovação do JWT em caso de 401.
+  Future<http.Response> _requisicaoUsuarioAutenticada(
+    String metodo,
+    String caminho, {
+    Map<String, dynamic>? body,
+  }) async {
+    Future<http.Response> enviar(String token) {
+      final uri = Uri.parse('$_apiBaseUrl$caminho');
+      final headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'Authorization': 'Bearer $token',
+      };
+      final f = metodo == 'PUT'
+          ? http.put(uri, headers: headers, body: jsonEncode(body))
+          : http.get(uri, headers: headers);
+      return f.timeout(ApiConstants.timeoutPadrao);
+    }
+
+    var token = await obterTokenAcesso();
+
+    // Sem access_token: tenta renovar direto, sem enviar 'Bearer ' vazio ao servidor
+    if (token == null || token.isEmpty) {
+      token = await renovarTokenAcesso();
+      if (token == null || token.isEmpty) {
+        return http.Response('', 401); // sem credenciais utilizáveis
+      }
+    }
+
+    var resp = await enviar(token);
+    if (resp.statusCode == 401) {
+      final novo = await renovarTokenAcesso();
+      if (novo != null && novo.isNotEmpty) resp = await enviar(novo);
+    }
+    return resp;
+  }
+
+  @override
+  Future<UsuarioModel?> sincronizarUsuarioPendente(int idUsuarioLocal) async {
+    try {
+      final db = await _db.database;
+      final rows = await db.query('usuarios', where: 'id_usuario = ?', whereArgs: [idUsuarioLocal]);
+      if (rows.isEmpty) return null;
+      final local = Map<String, dynamic>.from(rows.first);
+
+      final email = (local['email'] as String).trim().toLowerCase();
+      final senha = (local['senha_hash'] as String?) ?? '';
+      var servidorId = (local['servidor_id'] as num?)?.toInt();
+      final pendente = ((local['flag_sincronizado'] as num?)?.toInt() ?? 0) == 0;
+      final token = await obterTokenAcesso();
+      var temToken = token != null && token.isNotEmpty;
+
+      // Já está tudo em dia
+      if (servidorId != null && !pendente && temToken) return UsuarioModel.fromMap(local);
+
+      Future<void> gravarServidorId() async {
+        if (servidorId != null) {
+          await db.update('usuarios', {'servidor_id': servidorId},
+              where: 'id_usuario = ?', whereArgs: [idUsuarioLocal]);
+        }
+      }
+
+      var recemCriado = false;
+
+      // 1. Cadastro feito offline: cria a conta no servidor
+      if (servidorId == null && !temToken) {
+        final resp = await http
+            .post(
+              Uri.parse('$_apiBaseUrl/api/v1/usuarios/'),
+              headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+              body: jsonEncode(_payloadUsuarioApi(local, incluirSenha: true)),
+            )
+            .timeout(ApiConstants.timeoutPadrao);
+
+        if (resp.statusCode == 201 || resp.statusCode == 200) {
+          final data = jsonDecode(utf8.decode(resp.bodyBytes)) as Map<String, dynamic>;
+          servidorId = (data['id_usuario'] as num?)?.toInt();
+          recemCriado = true;
+          await gravarServidorId();
+        } else if (resp.statusCode != 409) {
+          // 409 = e-mail/CPF já existe: segue para o signin e tenta vincular a conta existente
+          debugPrint('[AuthRepositoryImpl.sincronizarUsuarioPendente] API recusou: ${resp.statusCode}');
+          return null;
+        }
+      }
+
+      // 2. Obtém os tokens JWT (usuário offline ainda não tinha)
+      if (!temToken) {
+        if (!await _obterTokensPorSignin(email, senha)) return null;
+        temToken = true;
+      }
+
+      // 3. Conta já existia no servidor: vincula o servidor_id
+      if (servidorId == null) {
+        final me = await _requisicaoUsuarioAutenticada('GET', '/api/v1/usuarios/me');
+        if (me.statusCode != 200) return null;
+        final data = jsonDecode(utf8.decode(me.bodyBytes)) as Map<String, dynamic>;
+        servidorId = (data['id_usuario'] as num?)?.toInt();
+        if (servidorId == null) return null;
+        await gravarServidorId();
+      }
+
+      // 4. Edições de perfil feitas offline
+      if (pendente && !recemCriado) {
+        final put = await _requisicaoUsuarioAutenticada(
+          'PUT',
+          '/api/v1/usuarios/me',
+          body: _payloadUsuarioApi(local, incluirSenha: true),
+        );
+        if (put.statusCode != 200) return null;
+      }
+
+      // 5. Marca como sincronizado
+      await db.update(
+        'usuarios',
+        {
+          'servidor_id': servidorId,
+          'flag_sincronizado': 1,
+          'ultima_sincronizacao': DateTime.now().toIso8601String(),
+        },
+        where: 'id_usuario = ?',
+        whereArgs: [idUsuarioLocal],
+      );
+      final atualizado = await db.query('usuarios', where: 'id_usuario = ?', whereArgs: [idUsuarioLocal]);
+      return atualizado.isEmpty ? null : UsuarioModel.fromMap(atualizado.first);
+    } catch (e) {
+      debugPrint('[AuthRepositoryImpl.sincronizarUsuarioPendente] offline/falha: $e');
+      return null;
+    }
+  }
+
+  /// Login de conta criada/editada offline que o servidor ainda não conhece (signin = 401).
+  Future<UsuarioModel?> _loginContaPendenteDeEnvio(String email, String senha) async {
+    final db = await _db.database;
+    final rows = await db.query(
+      'usuarios',
+      where: 'email = ? AND senha_hash = ? AND (servidor_id IS NULL OR flag_sincronizado = 0)',
+      whereArgs: [email, senha],
+    );
+    if (rows.isEmpty) return null;
+
+    final idLocal = rows.first['id_usuario'] as int;
+    final sincronizado = await sincronizarUsuarioPendente(idLocal);
+    await _salvarSessaoUsuarioLocal(idLocal);
+    return sincronizado ?? UsuarioModel.fromMap(rows.first);
   }
 
   @override
@@ -302,17 +519,28 @@ class AuthRepositoryImpl implements AuthRepository {
 
         // Realiza login automático na API para obter e armazenar o token JWT
         await _autenticarNaApi(emailLimpo, usuario.senhaHash);
-      } else if (response.statusCode == 409) {
+      } else if (response.statusCode == 409 || response.statusCode == 422) {
         final erro = jsonDecode(utf8.decode(response.bodyBytes));
-        throw Exception(erro['detail'] ?? 'E-mail ou CPF já cadastrado no servidor.');
+        final detalhe = erro is Map ? erro['detail'] : null;
+        throw CadastroRejeitadoException(
+          detalhe is String
+              ? detalhe
+              : (response.statusCode == 409
+                  ? 'E-mail ou CPF já cadastrado no servidor.'
+                  : 'Dados inválidos. Revise os campos informados.'),
+        );
       }
     } catch (e) {
       // Se for conflito explícito (409), repassa ao usuário; se for offline/405, segue offline-first
-      if (e.toString().contains('já cadastrado')) rethrow;
+      // Obs.: rejeição explícita da API (409/422) é repassada ao usuário.
+      // Timeout, sem rede ou 5xx: segue offline-first e o usuário fica pendente de envio.
+      if (e is CadastroRejeitadoException) rethrow;
       debugPrint('[AuthRepositoryImpl.cadastrarUsuario] fallback offline: $e');
     }
 
     // 4. Persiste no SQLite local (evitando duplicidade caso _autenticarNaApi já tenha inserido)
+    // Obs.: sem rede, o usuário fica com `flag_sincronizado = 0` e `servidor_id` nulo; o envio
+    // ocorre depois em `sincronizarUsuarioPendente()`.
     final jaInserido = await db.query(
       'usuarios',
       where: 'email = ?',
@@ -353,8 +581,11 @@ class AuthRepositoryImpl implements AuthRepository {
       }
     } catch (e) {
       // Se a API rejeitou explicitamente a senha (401), não permite login offline com senha errada
+      // Obs.: exceção — conta criada offline que o servidor ainda não conhece é enviada em
+      // `_loginContaPendenteDeEnvio` antes de recusar o login.
       if (e.toString().contains('E-mail ou senha inválidos')) {
-        return null;
+        // Exceção: conta criada offline que o servidor ainda não conhece -> envia e autentica
+        return await _loginContaPendenteDeEnvio(emailLimpo, senha);
       }
       debugPrint('[AuthRepositoryImpl.login] modo offline ativado: $e');
     }
@@ -452,6 +683,8 @@ class AuthRepositoryImpl implements AuthRepository {
     }
 
     // 2. Atualiza no SQLite local
+    // Obs.: se não sincronizou online, `flag_sincronizado = 0` mantém a edição pendente;
+    // ela será enviada depois por `sincronizarUsuarioPendente()`.
     final map = usuario.toMap();
     map['email'] = emailLimpo;
     map['flag_sincronizado'] = sincronizado ? 1 : 0;

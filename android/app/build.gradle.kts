@@ -1,7 +1,16 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// Obs. (novo): lê a chave do Google Maps do arquivo android/local.properties (fora do Git),
+// evitando deixar a chave escrita no AndroidManifest.xml / repositório.
+val localProperties = Properties().apply {
+    val arquivo = rootProject.file("local.properties")
+    if (arquivo.exists()) arquivo.inputStream().use { load(it) }
 }
 
 android {
@@ -27,6 +36,9 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // Obs. (novo): disponibiliza MAPS_API_KEY ao AndroidManifest.xml como ${MAPS_API_KEY}
+        manifestPlaceholders["MAPS_API_KEY"] = localProperties.getProperty("MAPS_API_KEY") ?: ""
     }
 
     buildTypes {

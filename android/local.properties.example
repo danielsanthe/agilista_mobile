@@ -1,0 +1,6 @@
+sdk.dir=C:\\Users\\Daniel\\AppData\\Local\\Android\\sdk
+flutter.sdk=C:\\src\\flutter
+flutter.buildMode=release
+flutter.versionName=2.0.0
+flutter.versionCode=2
+MAPS_API_KEY=COLE_SUA_CHAVE_AQUI

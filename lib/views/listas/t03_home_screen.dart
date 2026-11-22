@@ -25,6 +25,7 @@ import '../../controllers/listas_controller.dart';
 import '../../models/lista_model.dart';
 import 't04_criar_editar_lista_screen.dart';
 import 't05_t06_minhas_listas_screen.dart';
+import 't23_mapa_supermercados_screen.dart';
 
 /// ============================================================================
 /// TELA T03 — PAINEL PRINCIPAL / HOME
@@ -38,6 +39,9 @@ import 't05_t06_minhas_listas_screen.dart';
 ///   [ListsController] e dispara a sincronização bidirecional em segundo plano
 ///   ao abrir a tela, ao puxar para atualizar (`RefreshIndicator`) e ao
 ///   retornar de operações concluídas.
+///
+/// Obs.: ao retomar o app (`AppLifecycleState.resumed`) também sincroniza via
+/// `AuthController.sincronizarAgora()` e recarrega as listas.
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -45,17 +49,36 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObserver {
   /// Índice da aba selecionada na barra de navegação inferior (BottomNavigationBar).
   int _abaSelecionada = 0;
 
   @override
   void initState() {
     super.initState();
+    // Obs.: observa o ciclo de vida do app para sincronizar ao voltar ao primeiro plano
+    WidgetsBinding.instance.addObserver(this);
     // Dispara a carga inicial das listas do SQLite e sincronização em segundo plano
     Future.microtask(() {
       _carregarDados();
     });
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// Ao retomar o app (primeiro plano), envia pendências offline (usuário, categorias,
+  /// produtos e listas) e recarrega a tela com os dados atualizados do SQLite.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.read(authControllerProvider.notifier).sincronizarAgora().then((_) {
+        if (mounted) _carregarDados();
+      });
+    }
   }
 
   /// Recarrega as listas do usuário autenticado e sincroniza com a API FastAPI.
@@ -97,7 +120,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'ÁgiLista Mobile',
+              'AgiLista Mobile',
               style: TextStyle(
                 fontWeight: FontWeight.bold,
                 fontSize: 16,
@@ -106,7 +129,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             SizedBox(height: 4),
             Text(
-              'Versão: 1.0.0',
+              'Versão: 2.0.0',
               style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
             ),
             SizedBox(height: 12),
@@ -133,7 +156,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             SizedBox(height: 16),
             Text(
-              '© Todos os direitos reservados ao Grupo ÁgiLista.',
+              '© Todos os direitos reservados ao Grupo AgiLista.',
               style: TextStyle(
                 fontSize: 11,
                 fontStyle: FontStyle.italic,
@@ -190,6 +213,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       ),
     );
     if (mounted) _carregarDados();
+  }
+
+  /// Obs. (novo): navega para o Mapa (T23) com localização atual e supermercados frequentados.
+  Future<void> _abrirMapa() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const MapaSupermercadosScreen()),
+    );
   }
 
   /// Navega para a tela de cadastro e consulta de produtos (T10/T11).
@@ -347,6 +378,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         ),
         centerTitle: true,
         actions: [
+          // Obs. (novo): atalho para o Mapa, ao lado do ícone de notificações
+          IconButton(
+            tooltip: 'Mapa',
+            icon: const Icon(Icons.map_outlined, color: Colors.white),
+            onPressed: _abrirMapa,
+          ),
           IconButton(
             icon: const Icon(Icons.notifications_none, color: Colors.white),
             onPressed: () {},
@@ -433,6 +470,24 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               onTap: () {
                 Navigator.pop(context);
                 _abrirMinhasListas(usuarioId);
+              },
+            ),
+            const Divider(height: 1),
+
+            // Obs. (novo): atalho para o Mapa (localização atual e supermercados frequentados)
+            ListTile(
+              leading: const Icon(
+                Icons.map_outlined,
+                color: AppTheme.primaryBlue,
+              ),
+              title: const Text(
+                'Mapa',
+                style: TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: const Text('Onde estou e meus supermercados'),
+              onTap: () {
+                Navigator.pop(context);
+                _abrirMapa();
               },
             ),
             const Divider(height: 1),

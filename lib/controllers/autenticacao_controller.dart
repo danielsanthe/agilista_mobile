@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/usuario_model.dart';
 import '../repositories/autenticacao_repository.dart';
@@ -45,11 +46,43 @@ class AuthController extends AsyncNotifier<UsuarioModel?> {
 
   /// Dispara a sincronização global (Categorias -> Produtos -> Listas -> Itens)
   /// em segundo plano de forma não-bloqueante (sem travar navegação ou UI).
+  /// Obs.: antes das demais etapas executa a ETAPA 0 (envio do usuário criado/editado offline e
+  /// obtenção do JWT) via `_sincronizarTudo`, com trava contra execuções simultâneas.
   void _dispararSincronizacaoGlobal(int? usuarioId) {
     if (usuarioId == null) return;
-    unawaited(
-      ref.read(sincronizacaoListasServiceProvider).sincronizarListasEItens(usuarioId),
-    );
+    unawaited(_sincronizarTudo(usuarioId));
+  }
+
+  /// Trava anti-concorrência: login, cadastro, build() e retomada do app podem
+  /// disparar o ciclo ao mesmo tempo (evita POST duplicado de usuário e conflitos 409).
+  static Future<void>? _sincronizacaoEmAndamento;
+
+  Future<void> _sincronizarTudo(int usuarioId) {
+    return _sincronizacaoEmAndamento ??=
+        _executarSincronizacao(usuarioId).whenComplete(() => _sincronizacaoEmAndamento = null);
+  }
+
+  Future<void> _executarSincronizacao(int usuarioId) async {
+    // ETAPA 0: usuário (cadastro/edição feitos offline + obtenção do JWT).
+    // Sem isso não existe token e todas as demais sincronizações ficam adiadas.
+    try {
+      final atualizado = await _repository.sincronizarUsuarioPendente(usuarioId);
+      if (atualizado != null && state.hasValue && state.value?.idUsuario == usuarioId) {
+        state = AsyncValue.data(atualizado);
+      }
+    } catch (e) {
+      debugPrint('[AuthController] sincronização de usuário adiada: $e');
+    }
+
+    // Demais etapas: Categorias -> Produtos -> Listas -> Itens
+    await ref.read(sincronizacaoListasServiceProvider).sincronizarListasEItens(usuarioId);
+  }
+
+  /// Pode ser chamado ao retomar o app ou quando a conexão voltar.
+  Future<void> sincronizarAgora() async {
+    final usuario = state.value;
+    if (usuario?.idUsuario == null) return;
+    await _sincronizarTudo(usuario!.idUsuario!);
   }
 
   /// Efetua a autenticação do usuário a partir do e-mail e senha informados.
