@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../services/localizacao_service.dart';
 import '../../nucleo/tema/app_theme.dart';
 import '../../controllers/autenticacao_controller.dart';
+import 't01_login_screen.dart';
 
 /// ============================================================================
 /// TELA DE PERFIL E EDIÇÃO DE DADOS DO USUÁRIO (T02A - OFFLINE-FIRST)
@@ -180,10 +181,15 @@ class _PerfilUsuarioScreenState extends ConsumerState<PerfilUsuarioScreen> {
             child: const Text('CANCELAR'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(ctx);
-              ref.read(authControllerProvider.notifier).logout();
-              Navigator.of(context).popUntil((route) => route.isFirst);
+              await ref.read(authControllerProvider.notifier).logout();
+              
+              if (!mounted) return;
+              Navigator.of(context).pushAndRemoveUntil(
+                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                (route) => false,
+              );
             },
             child: const Text(
               'SAIR',
